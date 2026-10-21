@@ -1,8 +1,8 @@
 # ATLAS — Portfolio Risk & Trading Operations Platform
 
-A project for learning institutional-style portfolio valuation, currency exposure, and hypothetical stress scenarios. **This is a demo application, not an investment recommendation or production risk system.** The bundled prices and reference USD/CAD rate are entirely **synthetic**.
+A project for learning institutional-style portfolio valuation, currency exposure, and hypothetical stress scenarios. **This is a demo application, not an investment recommendation or production risk system.** Bundled asset prices and the **default** reference USD/CAD rate are **synthetic**. You may optionally retrieve official published Bank of Canada FX observations, but asset prices remain user-entered or synthetic.
 
-## Version 0.2 — what works
+## Version 0.3 — what works
 
 - FastAPI backend with a validated holdings input model
 - React + TypeScript dark-mode dashboard
@@ -15,6 +15,9 @@ A project for learning institutional-style portfolio valuation, currency exposur
 - Duplicate trade-ID detection, insufficient-position and insufficient-cash checks
 - Independent position and cash balance reconciliation, exception reporting, and transaction audit log
 - Editable reported balances on the React dashboard to demonstrate reconciling or clearing breaks
+- Bank of Canada Valet API integration (`FXUSDCAD`), including the official observation date and a 12-hour in-memory cache
+- FX translation-only history chart, annualized FX-only value volatility, and FX-only maximum drawdown
+- Optional one-click application of the latest published USD/CAD rate to the existing portfolio overview; manual rate remains supported
 
 ## 1. Prerequisites (Mac)
 
@@ -68,7 +71,7 @@ SHOP,Shopify demo,Equity,CAD,5,100
 - `currency`: `CAD` or `USD`.
 - `quantity`, `price`: nonnegative numeric values; total portfolio value must be positive.
 - Values are based **only on prices you supply**, not live prices.
-- Base USD/CAD demo FX defaults to 1.37, which is **not a live rate**. Update it on the dashboard.
+- Base USD/CAD demo FX defaults to 1.37, which is **not a live rate**. Update it manually or click the official FX history button to load the latest *published* Bank of Canada rate. The observation date is displayed.
 - For this initial version, portfolio weights are long-only; no leverage, derivatives, short positions, accrued income, fees or real-time execution.
 - FX shock is relative to the USD value in CAD; e.g. -10% means 10% lower CAD value per USD.
 
@@ -97,10 +100,21 @@ Scroll down to **Trade blotter & reconciliation** in the dashboard. The demo con
 Relevant API routes: `GET /api/trades/sample` and `POST /api/trades/reconcile`.
 All transactions are simulations. No orders are placed; there is no brokerage account or live trade integration.
 
+## FX history & official exchange rates (v0.3)
+
+Scroll to **Bank of Canada FX monitor** in the dashboard. Press **Load official FX history**, select 30, 90, or 180 observations, and optionally press **Use published FX rate in overview** to update the portfolio's CAD valuation and stress-test calculations. This leaves the asset prices untouched.
+
+- Data source: [Bank of Canada Valet API](https://www.bankofcanada.ca/valet-api-how-to/), series `FXUSDCAD` (Canadian dollars per US dollar).
+- Published daily observations are *not* streaming/real-time FX quotes. The observation date is shown; weekends and holidays may have no observation.
+- The backend caches each observation window for 12 hours to avoid unnecessary requests.
+- If the API is unavailable, ATLAS displays an error and **does not silently substitute a synthetic exchange rate**.
+- **Critical methodological limitation:** historical FX translation freezes today's quantities and native-currency asset prices and changes **only** the USD/CAD conversion rate. Annualized volatility and drawdown describe *FX translation of that static snapshot only*. They are **not** historical investment returns, backtesting, or the total portfolio risk.
+- API: `GET /api/fx/usd-cad` and `POST /api/fx/translation-history?days=90` (same JSON body as `POST /api/analyze`).
+- No API key or account required. Internet access is required for these new endpoints.
+
 ## Planned stages
 
-- **v0.3:** Bank of Canada Valet FX integration with rate timestamps and caching; licensed historical market price ingestion
-- **v0.4:** Docker, PostgreSQL, CI/CD, more tests, deployment
+- **v0.4:** Licensed historic asset prices + methodology-validated actual return/risk metrics, PostgreSQL, Docker and CI/CD
 - **v0.5:** Source-grounded AI analyst explaining quantitative results
 
 ### Engineering standards to add before claiming 'production-ready'
@@ -111,17 +125,8 @@ Authentication, per-user portfolios, secrets management, auditable events, robus
 
 To bridge real engineering skills (ETL, validation, automation, APIs) with investment questions (currency exposure, stress testing, trade operations) in one demonstrable application.
 
-## Publishing to GitHub
+## Publishing updates to GitHub
 
-If the GitHub repository is empty, from the `atlas-starter` folder run:
+Your repository already exists at `Normie004/atlas-portfolio-risk`. Open GitHub Desktop, confirm that the ATLAS folder is selected, inspect the changed files, enter a summary such as `Add official FX history and FX-only risk analytics`, click **Commit to main**, then **Push origin**. Never commit keys or `.env` files.
 
-```bash
-git init
-git add .
-git commit -m "Build ATLAS v0.2 dashboard and reconciliation engine"
-git branch -M main
-git remote add origin https://github.com/Normie004/atlas-portfolio-risk.git
-git push -u origin main
-```
-
-`.gitignore` excludes virtual environments, local node packages, caches and build output. Do not commit keys or .env files.
+`.gitignore` excludes virtual environments, local node packages, caches and build output.

@@ -8,6 +8,7 @@ type Result={total_value_cad:number,scenario_value_cad:number,scenario_pnl_cad:n
 type LedgerPosition={symbol:string,currency:'CAD'|'USD',quantity:string}
 type LedgerTrade={trade_id:string,symbol:string,side:'BUY'|'SELL',quantity:string,price:string,currency:'CAD'|'USD',fee:string}
 type TradeRequest={opening_positions:LedgerPosition[],opening_cash:Record<'CAD'|'USD',string>,trades:LedgerTrade[],reported_positions:LedgerPosition[],reported_cash:Record<'CAD'|'USD',string>}
+type FxHistoryResult={source:string,source_url:string,observation_date:string,latest_usd_to_cad:number,latest_value_cad:number,fx_only_change_pct:number,fx_only_annualized_volatility_pct:number|null,fx_only_max_drawdown_pct:number,usd_exposure_pct:number,methodology:string,cache_status:string,observations:{date:string,usd_to_cad:number,value_cad:number}[]}
 type TradeResult={trades_received:number,trades_applied:number,trades_rejected:number,break_count:number,expected_positions:LedgerPosition[],expected_cash:Record<'CAD'|'USD',string>,trade_exceptions:{code:string,trade_id:string,detail:string}[],reconciliation_breaks:{type:string,key:string,currency:string,expected:string,reported:string,difference:string}[],audit_log:{trade_id:string,symbol:string,side:string,status:string,reason:string|null}[]}
 
 const money=(n:number)=>new Intl.NumberFormat('en-CA',{style:'currency',currency:'CAD',maximumFractionDigits:0}).format(n)
@@ -44,12 +45,47 @@ function ReconciliationLab(){
  </section>
 }
 
+function FxHistory({input,onRate}:{input:Request,onRate:(rate:number,date:string)=>void}){
+ const [result,setResult]=useState<FxHistoryResult|null>(null)
+ const [busy,setBusy]=useState(false)
+ const [error,setError]=useState('')
+ const [days,setDays]=useState(90)
+ // History belongs to one portfolio snapshot. Clear when CSV/holdings change.
+ useEffect(()=>{setResult(null);setError('')},[input.holdings])
+ async function load(){
+  setBusy(true);setError('')
+  try{
+   const value=await api(`/api/fx/translation-history?days=${days}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)}) as FxHistoryResult
+   setResult(value)
+  }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+ }
+ const points=result?.observations||[]
+ const values=points.map(p=>p.value_cad)
+ const lo=values.length?Math.min(...values):0
+ const hi=values.length?Math.max(...values):1
+ const margin=Math.max((hi-lo)*.15,hi*.0005,1)
+ const scaleY=(v:number)=>148-(v-(lo-margin))/(hi-lo+2*margin)*120
+ const plot=points.map((p,i)=>`${(i/Math.max(points.length-1,1)*672+14).toFixed(1)},${scaleY(p.value_cad).toFixed(1)}`).join(' ')
+ return <section id="fx-history" className="panel fx-history-panel">
+  <div className="section-head"><div><h3>Bank of Canada FX monitor</h3><p className="small">Historical currency translation of fixed portfolio holdings — not historical stock returns.</p></div><span className="pill">PUBLISHED FX / V0.3</span></div>
+  <div className="fx-history-actions"><label>Observation window <select value={days} onChange={e=>setDays(Number(e.target.value))}><option value={30}>30 business observations</option><option value={90}>90 business observations</option><option value={180}>180 business observations</option></select></label><button className="primary" disabled={busy} onClick={()=>void load()}>{busy?'Fetching official rates…':'Load official FX history'}</button></div>
+  {error&&<div className="alert">{error} Your editable demo exchange rate is unchanged.</div>}
+  {result?<>
+   <div className="fx-history-metrics"><Metric label="LATEST PUBLISHED USD/CAD" value={result.latest_usd_to_cad.toFixed(4)} foot={`Bank of Canada · ${result.observation_date}`}/><Metric label="FX-ONLY PORTFOLIO CHANGE" value={pct(result.fx_only_change_pct)} foot="Static quantities and native prices" tone={result.fx_only_change_pct<0?'negative':'positive'}/><Metric label="FX-ONLY VOLATILITY" value={result.fx_only_annualized_volatility_pct===null?'—':pct(result.fx_only_annualized_volatility_pct)} foot="Annualized sample daily FX-translation returns"/><Metric label="FX-ONLY MAX DRAWDOWN" value={pct(result.fx_only_max_drawdown_pct)} foot="Based on the FX-translation series"/></div>
+   <div className="fx-chart"><div className="between"><span className="micro">Constant native prices · variable published USD/CAD · CAD</span><span className="mono">Latest value {money(result.latest_value_cad)}</span></div><svg viewBox="0 0 700 175" role="img" aria-label="Historical CAD portfolio valuation with frozen native prices and changing USD CAD exchange rate"><line x1="14" y1="148" x2="686" y2="148" stroke="#30435d"/><line x1="14" y1="87" x2="686" y2="87" stroke="#25354a" strokeDasharray="4 5"/><polyline points={plot} fill="none" stroke="#73dbc5" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/></svg><div className="between micro"><span>{points[0]?.date}</span><span>{points[points.length-1]?.date}</span></div></div>
+   <div className="fx-history-actions"><span className="micro">Published rate: {result.observation_date} · {points.length} observations · <a href={result.source_url} target="_blank" rel="noopener noreferrer">Bank of Canada methodology ↗</a></span><button className="ghost compact" onClick={()=>onRate(result.latest_usd_to_cad,result.observation_date)}>Use published FX rate in overview</button></div>
+   <p className="micro fx-methodology">{result.methodology} The source publishes on business days and may not yet include today's data. This is not an executable FX quote.</p>
+  </>:<p className="small fx-intro">Select a window and fetch official USD/CAD observations. ATLAS never substitutes a demo value when the Bank of Canada API is unavailable.</p>}
+ </section>
+}
+
 export default function App(){
  const [input,setInput]=useState<Request|null>(null)
  const [data,setData]=useState<Result|null>(null)
  const [error,setError]=useState('')
  const [working,setWorking]=useState(false)
  const [uploaded,setUploaded]=useState(false)
+ const [officialRateDate,setOfficialRateDate]=useState<string|null>(null)
  const picker=useRef<HTMLInputElement|null>(null)
  const lastRequest=useRef(0)
  useEffect(()=>{api('/api/sample').then((sample:Request)=>setInput(sample)).catch(e=>setError('Cannot connect to backend. Start FastAPI first. '+e.message))},[])
@@ -64,16 +100,17 @@ export default function App(){
  },[input])
  const setScenario=(name:keyof Request['scenario'],v:number)=>setInput(o=>o?{...o,scenario:{...o.scenario,[name]:String(v)}}:o)
  async function onFile(file?:File){if(!file)return;setWorking(true);try{const form=new FormData();form.append('file',file);const parsed=await api('/api/portfolio/upload',{method:'POST',body:form}) as Request;setInput(o=>({...parsed,usd_to_cad:o?.usd_to_cad||parsed.usd_to_cad,scenario:o?.scenario||parsed.scenario}));setUploaded(true);setError('')}catch(e){setError((e as Error).message)}finally{setWorking(false)}}
- const reset=()=>{api('/api/sample').then((s:Request)=>{setInput(s);setUploaded(false);setError('')})}
+ const reset=()=>{api('/api/sample').then((s:Request)=>{setInput(s);setUploaded(false);setOfficialRateDate(null);setError('')})}
+ const applyOfficialRate=(rate:number,date:string)=>{setInput(o=>o?{...o,usd_to_cad:String(rate)}:o);setOfficialRateDate(date)}
  return <div className="app-shell">
   <aside className="sidebar"><div className="logo"><div className="logo-mark">A</div><div><b>ATLAS</b><span>PORTFOLIO SYSTEMS</span></div></div>
-   <div className="nav-caption">WORKSPACE</div><a className="nav-item active" href="#overview"><span className="nav-dot"/> Portfolio overview</a><a className="nav-item" href="#exposure">◇ &nbsp; Exposure analysis</a><a className="nav-item" href="#positions">≡ &nbsp; Position ledger</a><a className="nav-item" href="#reconciliation">⇄ &nbsp; Trade reconciliation</a><a className="nav-item" href="#methodology">◈ &nbsp; Methodology</a>
-   <div className="sidebar-bottom"><div className="terminal-label"><span className="status-led"/> LOCAL DEMO</div><div className="micro">Synthetic asset prices, editable scenarios, no live market feeds.</div><div className="version">ATLAS / VERSION 0.2</div></div>
+   <div className="nav-caption">WORKSPACE</div><a className="nav-item active" href="#overview"><span className="nav-dot"/> Portfolio overview</a><a className="nav-item" href="#exposure">◇ &nbsp; Exposure analysis</a><a className="nav-item" href="#positions">≡ &nbsp; Position ledger</a><a className="nav-item" href="#reconciliation">⇄ &nbsp; Trade reconciliation</a><a className="nav-item" href="#fx-history">↗ &nbsp; Official FX monitor</a><a className="nav-item" href="#methodology">◈ &nbsp; Methodology</a>
+   <div className="sidebar-bottom"><div className="terminal-label"><span className="status-led"/> LOCAL DEMO</div><div className="micro">Synthetic asset prices. Optional official FX observations.</div><div className="version">ATLAS / VERSION 0.3</div></div>
   </aside>
   <main id="overview" className="content"><header className="header"><div><p className="overline">PORTFOLIO INTELLIGENCE / OVERVIEW</p><h1>Risk overview<span className="accent">.</span></h1><p className="subtitle">Portfolio valuation, asset exposure and hypothetical stress analysis.</p></div><div className="header-actions"><button className="ghost" onClick={reset}>↺ Reset demo</button><button className="primary" onClick={()=>picker.current?.click()}>↑ Upload CSV</button><input ref={picker} hidden type="file" accept=".csv,text/csv" onChange={e=>{onFile(e.target.files?.[0]);e.target.value=''}}/></div></header>
-  <div className="notice"><span className="status-led amber"/><strong>EDUCATIONAL DEMO</strong><span>Prices and USD/CAD are synthetic or user-provided, not live feeds. Do not use for investment decisions.</span></div>
+  <div className="notice"><span className="status-led amber"/><strong>EDUCATIONAL DEMO</strong><span>Asset prices are synthetic or user-provided. USD/CAD is a demo rate unless you explicitly apply the Bank of Canada published rate. Not investment advice.</span></div>
   {error&&<div className="alert"><b>Something needs attention:</b> {error}</div>}
-  {input&&<div className="utility"><div><span className="overline">DATA SOURCE</span><div className="source">{uploaded?'Uploaded CSV':'Synthetic sample portfolio'} <span className="pill">{input.holdings.length} positions</span></div></div><div className="fx-control"><label htmlFor="fx">USD → CAD reference FX rate</label><input id="fx" type="number" min="0.01" max="10" step="0.01" value={input.usd_to_cad} onChange={e=>setInput({...input,usd_to_cad:e.target.value})}/></div></div>}
+  {input&&<div className="utility"><div><span className="overline">DATA SOURCE</span><div className="source">{uploaded?'Uploaded CSV':'Synthetic sample portfolio'} <span className="pill">{input.holdings.length} positions</span></div></div><div className="fx-control"><label htmlFor="fx">USD → CAD reference FX rate {officialRateDate?<span className="positive">· BoC {officialRateDate}</span>:<span>· demo/manual</span>}</label><input id="fx" type="number" min="0.01" max="10" step="0.01" value={input.usd_to_cad} onChange={e=>{setInput({...input,usd_to_cad:e.target.value});setOfficialRateDate(null)}}/></div></div>}
   {data?<>
    <div className="metrics"><Metric label="TOTAL MARKET VALUE" value={money(data.total_value_cad)} foot="Portfolio marked in CAD"/><Metric label="HYPOTHETICAL SCENARIO P&L" value={(data.scenario_pnl_cad>=0?'+':'')+money(data.scenario_pnl_cad)} foot={`${pct(data.scenario_return_pct)} under selected shocks`} tone={data.scenario_pnl_cad<0?'negative':'positive'}/><Metric label="TOP POSITION WEIGHT" value={pct(data.largest_position_pct)} foot="Largest single holding"/><Metric label="POSITIONS" value={String(data.position_count).padStart(2,'0')} foot="Across CAD and USD"/></div>
    <div id="exposure" className="grid2"><ExposureBars title="Asset allocation" data={data.asset_exposures}/><ExposureBars title="Currency exposure" data={data.currency_exposures}/></div>
@@ -82,7 +119,8 @@ export default function App(){
    <div className="scenario-outcome"><div><span className="overline">SCENARIO PORTFOLIO VALUE</span><strong>{money(data.scenario_value_cad)}</strong></div><span className={'scenario-change '+(data.scenario_pnl_cad<0?'negative':'positive')}>{data.scenario_pnl_cad>=0?'+':''}{money(data.scenario_pnl_cad)} / {pct(data.scenario_return_pct)}</span></div></section>
    <section id="positions" className="panel table-panel"><div className="section-head"><div><h3>Position ledger</h3><p className="small">Valuation derived from supplied quantity × price × currency conversion.</p></div><button className="ghost compact" onClick={()=>window.open('/api/template','_blank')}>↓ Sample CSV format</button></div><div className="table-scroll"><table><thead><tr><th>INSTRUMENT</th><th>CLASS</th><th>CCY</th><th>QUANTITY</th><th>PRICE</th><th>VALUE (CAD)</th><th>WEIGHT</th><th>SCENARIO P&L</th></tr></thead><tbody>{data.positions.map((p,i)=><tr key={`${p.symbol}-${i}`}><td><strong>{p.symbol}</strong><span className="table-sub">{p.name}</span></td><td>{p.asset_class}</td><td>{p.currency}</td><td className="mono">{Number(p.quantity).toLocaleString('en-CA')}</td><td className="mono">{Number(p.price).toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="mono">{money(p.value_cad)}</td><td className="mono">{pct(p.weight_pct)}</td><td className={'mono '+(p.scenario_pnl_cad<0?'negative':'positive')}>{p.scenario_pnl_cad>=0?'+':''}{money(p.scenario_pnl_cad)}</td></tr>)}</tbody></table></div></section>
    <ReconciliationLab/>
-   <section id="methodology" className="bottom-grid"><div className="panel mini"><h3>Methodology notes</h3><ul>{data.assumptions.map(a=><li key={a}>{a}</li>)}</ul></div><div className="panel mini"><h3>Next releases</h3><div className="roadmap"><span>02</span><div><b>Live FX & price ingestion</b><small>Bank of Canada FX, licensed market data</small></div></div><div className="roadmap"><span>03</span><div><b>Live FX & price ingestion</b><small>Bank of Canada FX, licensed market data</small></div></div><div className="roadmap"><span>04</span><div><b>Research assistant</b><small>Auditable natural-language insights</small></div></div></div></section>
+   {input&&<FxHistory input={input} onRate={applyOfficialRate}/>}
+   <section id="methodology" className="bottom-grid"><div className="panel mini"><h3>Methodology notes</h3><ul>{data.assumptions.map(a=><li key={a}>{a}</li>)}</ul></div><div className="panel mini"><h3>Next releases</h3><div className="roadmap"><span>02</span><div><b>Official FX translation history</b><small>Bank of Canada observations (v0.3)</small></div></div><div className="roadmap"><span>03</span><div><b>Historical asset pricing</b><small>Licensed prices and total-return analytics (planned)</small></div></div><div className="roadmap"><span>04</span><div><b>Research assistant</b><small>Auditable natural-language insights</small></div></div></div></section>
    <footer>ATLAS / LOCAL DEVELOPMENT BUILD <span>{working?'RECALCULATING…':'CALCULATIONS READY'}</span></footer>
   </>:<div className="loading">Starting risk engine…</div>}
  </main></div>

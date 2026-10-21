@@ -10,8 +10,10 @@ from .analytics import analyze
 from .sample import SAMPLE
 from .reconciliation import ReconcileRequest, reconcile
 from .trade_sample import TRADE_SAMPLE
+from .bank_fx import fetch_fx_history, FXUnavailable
+from .fx_analytics import fx_translation_history
 
-app = FastAPI(title='ATLAS Portfolio Analytics API', version='0.2.0')
+app = FastAPI(title='ATLAS Portfolio Analytics API', version='0.3.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],
@@ -22,7 +24,7 @@ app.add_middleware(
 
 @app.get('/api/health')
 def health():
-    return {'status':'ok','project':'ATLAS','version':'0.2.0'}
+    return {'status':'ok','project':'ATLAS','version':'0.3.0'}
 
 @app.get('/api/sample')
 def sample():
@@ -79,5 +81,30 @@ def sample_trades():
 def reconcile_trades(payload: ReconcileRequest):
     try:
         return reconcile(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/api/fx/usd-cad')
+def latest_fx():
+    """Latest official published Bank of Canada USD/CAD observation."""
+    try:
+        result = fetch_fx_history(days=5)
+        # Return a small shape rather than history for this endpoint.
+        return {k: value for k, value in result.items() if k != 'observations'}
+    except FXUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post('/api/fx/translation-history')
+def translation_history(payload: AnalyzeRequest, days: int = 90):
+    """FX-only historical translation of today's snapshot holdings and prices."""
+    if not 2 <= days <= 365:
+        raise HTTPException(status_code=422, detail='Days must be between 2 and 365.')
+    try:
+        fx_data = fetch_fx_history(days=days)
+        return fx_translation_history(payload, fx_data)
+    except FXUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
