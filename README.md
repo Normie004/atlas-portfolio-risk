@@ -1,8 +1,8 @@
 # ATLAS — Portfolio Risk & Trading Operations Platform
 
-A project for learning institutional-style portfolio valuation, currency exposure, and hypothetical stress scenarios. **This is a demo application, not an investment recommendation or production risk system.** Bundled asset prices and the **default** reference USD/CAD rate are **synthetic**. You may optionally retrieve official published Bank of Canada FX observations, but asset prices remain user-entered or synthetic.
+A project for learning institutional-style portfolio valuation, currency exposure, trade reconciliation and historical price-only risk analysis. **This is an educational application, not investment advice or a production trading/risk system.** The bundled spot and historical prices are **synthetic**. Optional integrations support official published Bank of Canada USD/CAD rates and Alpha Vantage historical raw closes using your own API key.
 
-## Version 0.3 — what works
+## Version 0.4 — what works
 
 - FastAPI backend with a validated holdings input model
 - React + TypeScript dark-mode dashboard
@@ -18,6 +18,12 @@ A project for learning institutional-style portfolio valuation, currency exposur
 - Bank of Canada Valet API integration (`FXUSDCAD`), including the official observation date and a 12-hour in-memory cache
 - FX translation-only history chart, annualized FX-only value volatility, and FX-only maximum drawdown
 - Optional one-click application of the latest published USD/CAD rate to the existing portfolio overview; manual rate remains supported
+- **New v0.4:** historical security closing-price CSV ingestion, currency and duplicate validation, common-date reconciliation
+- Historical portfolio mark-to-market with fixed quantities, daily price-only CAD value changes, annualized realized volatility and maximum drawdown
+- Explicit FX choice: fixed local input rate or published Bank of Canada historical observations, with prior-date lookback (no future FX)
+- Reproducible **synthetic 65-day history** to try the engine without an API key
+- **Optional** Alpha Vantage `TIME_SERIES_DAILY` raw historical close API with a **private local-only** key, explicit TSX vs US-exchange mapping for demo symbols, 12-hour in-memory caching and no silent synthetic fallback
+- 45 backend tests covering portfolio, reconciliation, currency, historical metrics and data ingestion
 
 ## 1. Prerequisites (Mac)
 
@@ -112,10 +118,44 @@ Scroll to **Bank of Canada FX monitor** in the dashboard. Press **Load official 
 - API: `GET /api/fx/usd-cad` and `POST /api/fx/translation-history?days=90` (same JSON body as `POST /api/analyze`).
 - No API key or account required. Internet access is required for these new endpoints.
 
+## Historical price & portfolio risk lab (v0.4)
+
+Scroll to **Historical price & portfolio risk lab**. Click **Load synthetic historical demo** first; this loads 65 deterministic demonstration price dates for the original six non-cash holdings and calculates a fixed-holdings CAD valuation history using the editable overview FX rate. Synthetic results are clearly labelled.
+
+To ingest real user-licensed daily prices, choose **Import historical prices CSV**. Required columns:
+
+```csv
+date,symbol,currency,close
+2026-10-15,AAPL,USD,250.12
+2026-10-16,AAPL,USD,252.51
+2026-10-15,MSFT,USD,510.20
+2026-10-16,MSFT,USD,513.10
+```
+
+*Numbers above are format examples, not asserted market observations. At least five shared daily observations are needed for **every** non-cash instrument in your current portfolio; sample rows alone cannot produce a calculation. Prices must have the correct quote currency. Download valid data only from a provider whose terms permit your use.*
+
+To use the optional Alpha Vantage integration:
+
+1. Request a personal key on [Alpha Vantage's support page](https://www.alphavantage.co/support/#api-key). Their free plan has a 25-API-requests-per-day published limit and raw daily close data is available with the compact output (about 100 daily closes per symbol).
+2. In your **Mac's own project folder**, create `backend/.env` from `backend/.env.example` and replace `your_personal_key_here` with your personal key. **Never send the key to ChatGPT or commit it to GitHub.** `.gitignore` excludes `.env` and `.env.*` (except the sample file).
+3. Install the updated backend requirements (`python -m pip install -r requirements.txt`) and restart FastAPI. Refresh the dashboard; its provider status should show **API key configured**.
+4. Click **Fetch Alpha Vantage closes**. Each eligible non-cash holding uses a separate provider request, which consumes your personal quota; a quota error will be shown explicitly. This demo permits six symbols only: `RY` (maps to `RY.TRT`), `SHOP` (`SHOP.TRT`), `XBB` (`XBB.TRT`), `AAPL`, `MSFT`, `BND`. The direct provider map is restricted intentionally, to avoid silently mixing NYSE RY/USD with TSX RY/CAD. The provider's quote availability is not guaranteed; upload a CSV when unsupported or rate-limited.
+5. Alpha Vantage loads *raw, unadjusted* closes. For USD holdings, ATLAS will also request published Bank of Canada FX history; it fails visibly if either external source is unavailable. The overview's snapshot numbers are still separate from historical source data.
+
+**Historical methodology and limitations**
+
+- `value_CAD(t) = Σ fixed_quantity × raw_close(t) × USD/CAD(t) + native_cash_valued_in_CAD(t)`.
+- All non-cash symbols must share at least five dates; the engine uses their **intersection** and never fabricates missing security closes. For currency conversion, an official published FX observation at or before each date (up to five calendar days prior) can be used; future rates are never used.
+- `price_only_change_pct = (ending_value / starting_value − 1) × 100`.
+- `annualized_volatility_pct = stddev(sample_daily_value_changes) × sqrt(252) × 100`.
+- `max_drawdown_pct = min(value_t / max(value_0 ... value_t) − 1) × 100`.
+- Values describe today's **fixed quantities** repriced through past raw closes and optional published FX rates. They are *not* your portfolio's realized P&L, total returns, dividends-adjusted returns, a transaction-level backtest or forecast. Splits, dividends, coupon/accrued interest, fees, rebalancing, and benchmark/risk-free adjustments are excluded. The Bond category is supported as a simplified market-price instrument; it is not a bond yield/interest-rate pricing model.
+- API routes: `GET /api/history/sample`, `POST /api/history/upload`, `POST /api/history/analyze`, `POST /api/history/alpha-vantage`, `GET /api/history/market-status`. The Alpha Vantage key is never returned to the browser; do not deploy these unauthenticated example endpoints to a public server.
+
 ## Planned stages
 
-- **v0.4:** Licensed historic asset prices + methodology-validated actual return/risk metrics, PostgreSQL, Docker and CI/CD
-- **v0.5:** Source-grounded AI analyst explaining quantitative results
+- **v0.5:** PostgreSQL, Docker, CI/CD and automated frontend build; better market-data provenance, adjusted price and corporate-action methodology
+- **v0.6:** Source-grounded AI analyst explaining quantitative results
 
 ### Engineering standards to add before claiming 'production-ready'
 
@@ -127,6 +167,6 @@ To bridge real engineering skills (ETL, validation, automation, APIs) with inves
 
 ## Publishing updates to GitHub
 
-Your repository already exists at `Normie004/atlas-portfolio-risk`. Open GitHub Desktop, confirm that the ATLAS folder is selected, inspect the changed files, enter a summary such as `Add official FX history and FX-only risk analytics`, click **Commit to main**, then **Push origin**. Never commit keys or `.env` files.
+Your repository already exists at `Normie004/atlas-portfolio-risk`. Open GitHub Desktop, confirm that the ATLAS folder is selected, inspect the changed files, enter a summary such as `Add historical price-only portfolio risk analytics`, click **Commit to main**, then **Push origin**. Never commit keys or `.env` files.
 
 `.gitignore` excludes virtual environments, local node packages, caches and build output.

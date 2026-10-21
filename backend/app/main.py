@@ -12,8 +12,11 @@ from .reconciliation import ReconcileRequest, reconcile
 from .trade_sample import TRADE_SAMPLE
 from .bank_fx import fetch_fx_history, FXUnavailable
 from .fx_analytics import fx_translation_history
+from .price_history import PriceHistoryRequest, compute_price_history, parse_price_csv, HistoricalDataError, MAX_CSV_BYTES
+from .sample_prices import sample_price_rows
+from .alpha_vantage import fetch_daily_prices, MarketDataUnavailable
 
-app = FastAPI(title='ATLAS Portfolio Analytics API', version='0.3.0')
+app = FastAPI(title='ATLAS Portfolio Analytics API', version='0.4.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],
@@ -24,7 +27,7 @@ app.add_middleware(
 
 @app.get('/api/health')
 def health():
-    return {'status':'ok','project':'ATLAS','version':'0.3.0'}
+    return {'status':'ok','project':'ATLAS','version':'0.4.0'}
 
 @app.get('/api/sample')
 def sample():
@@ -107,4 +110,51 @@ def translation_history(payload: AnalyzeRequest, days: int = 90):
     except FXUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/api/history/sample')
+def sample_historical_prices():
+    """Deterministic SYNTHETIC historical closes; not market observations."""
+    return sample_price_rows()
+
+
+@app.post('/api/history/upload')
+async def upload_price_history(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith('.csv'):
+        raise HTTPException(status_code=400, detail='Historical prices must be a .csv file.')
+    raw = await file.read(MAX_CSV_BYTES + 1)
+    try:
+        rows = parse_price_csv(raw)
+        return {'source': f'Uploaded historical price CSV ({file.filename[:60]})', 'prices': rows}
+    except HistoricalDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/api/history/market-status')
+def market_status():
+    import os
+    return {'provider':'Alpha Vantage', 'configured':bool(os.getenv('ALPHAVANTAGE_API_KEY', '').strip()),
+            'supported_sample_symbols':['RY','SHOP','AAPL','MSFT','XBB','BND']}
+
+
+@app.post('/api/history/alpha-vantage')
+def market_history(portfolio: AnalyzeRequest):
+    """Raw/unadjusted EOD closes for explicitly exchange-mapped DEMO symbols."""
+    try:
+        return fetch_daily_prices(portfolio.holdings)
+    except MarketDataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post('/api/history/analyze')
+def price_history_analysis(payload: PriceHistoryRequest):
+    try:
+        official_fx = None
+        if payload.use_official_fx and any(h.currency == 'USD' and h.quantity > 0 for h in payload.portfolio.holdings):
+            official_fx = fetch_fx_history(days=365)['observations']
+        return compute_price_history(payload, official_fx)
+    except FXUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HistoricalDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
