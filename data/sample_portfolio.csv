@@ -1,0 +1,8 @@
+symbol,name,asset_class,currency,quantity,price
+RY,Royal Bank of Canada demo,Equity,CAD,180,160
+SHOP,Shopify demo,Equity,CAD,120,145
+AAPL,Apple demo,Equity,USD,80,225
+MSFT,Microsoft demo,Equity,USD,55,450
+XBB,Canadian bond ETF demo,Bond,CAD,500,30
+BND,US bond ETF demo,Bond,USD,400,73
+CASH,CAD cash demo,Cash,CAD,12500,1
